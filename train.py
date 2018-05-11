@@ -1,4 +1,5 @@
 #coding=utf-8
+import argparse
 import torch
 from torch.autograd import Variable
 from torch.backends import cudnn
@@ -6,26 +7,79 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
+import cv2
 import pprint
 
-from data_loader import KFDataset
-from models import KFSGNet
+from data_loader import MPIIDataset
+from models import HGNet
+
+parser = argparse.ArgumentParser(
+    description='Receptive Field Block Net Training')
+parser.add_argument('-v', '--version', default='SSD_vgg',
+                    help='RFB_vgg ,RFB_E_vgg RFB_mobile SSD_vgg version.')
+parser.add_argument('-s', '--size', default='512',
+                    help='300 or 512 input size.')
+parser.add_argument('-d', '--dataset', default='COCO',
+                    help='VOC or COCO dataset')
+parser.add_argument(
+    '--basenet', default='weights/vgg16_reducedfc.pth', help='pretrained base model')
+parser.add_argument('--jaccard_threshold', default=0.5,
+                    type=float, help='Min Jaccard index for matching')
+parser.add_argument('-b', '--batch_size', default=8,
+                    type=int, help='Batch size for training')
+parser.add_argument('--num_workers', default=4,
+                    type=int, help='Number of workers used in dataloading')
+parser.add_argument('--cuda', default=True,
+                    type=bool, help='Use cuda to train model')
+parser.add_argument('--ngpu', default=2, type=int, help='gpus')
+parser.add_argument('--lr', '--learning-rate',
+                    default=4e-3, type=float, help='initial learning rate')
+parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
+
+parser.add_argument('--resume_net', default=False, help='resume net for retraining')
+parser.add_argument('--resume_epoch', default=0,
+                    type=int, help='resume iter for retraining')
+
+parser.add_argument('-max', '--max_epoch', default=300,
+                    type=int, help='max epoch for retraining')
+parser.add_argument('--weight_decay', default=5e-4,
+                    type=float, help='Weight decay for SGD')
+parser.add_argument('-we', '--warm_epoch', default=1,
+                    type=int, help='max epoch for retraining')
+parser.add_argument('--gamma', default=0.1,
+                    type=float, help='Gamma update for SGD')
+parser.add_argument('--log_iters', default=True,
+                    type=bool, help='Print the loss at each iteration')
+parser.add_argument('--save_folder', default='weights/',
+                    help='Location to save checkpoint models')
+parser.add_argument('--date', default='1213')
+parser.add_argument('--save_frequency', default=10)
+parser.add_argument('--retest', default=False, type=bool,
+                    help='test cache results')
+parser.add_argument('--test_frequency', default=10)
+
+args = parser.parse_args()
 
 config = dict()
-config['lr'] = 0.000001
+config['lr'] = 0.1
 config['momentum'] = 0.9
 config['weight_decay'] = 1e-4
-config['epoch_num'] = 400
-config['batch_size'] = 72
-config['sigma'] = 5.
+config['epoch_num'] = 10
+config['batch_size'] = 1
+config['sigma'] = 1.
 config['debug_vis'] = False         # 是否可视化heatmaps
-config['fname'] = 'data/test.csv'
+config['fname'] = 'data/annolist/train_gt.mat'
+config['image_root'] = 'data/images/'
+config['in_width'] = 128
+config['out_width'] = 128
+config['nclass'] = 16
+config['point_size'] = 5 #奇数
 # config['fname'] = 'data/training.csv'
 # config['is_test'] = False
 config['is_test'] = True
 config['save_freq'] = 10
-config['checkout'] = 'data/weight/kd_epoch_909_model.ckpt'
-config['start_epoch'] = 850
+config['checkout'] = ''
+config['start_epoch'] = 0
 config['eval_freq'] = 5
 config['debug'] = False
 config['lookup'] = 'data/IdLookupTable.csv'
@@ -64,7 +118,6 @@ config['featurename2id'] = {
 
 def get_peak_points(heatmaps):
     """
-
     :param heatmaps: numpy array (N,15,96,96)
     :return:numpy array (N,15,2)
     """
@@ -120,14 +173,22 @@ if __name__ == '__main__':
     pprint.pprint(config)
     torch.manual_seed(0)
     cudnn.benchmark = True
-    net = KFSGNet()
+    net = HGNet()
+
+    def init_weights(m):
+        print(m)
+        if type(m) == nn.Linear:
+            m.weight.data.fill_(1.0)
+            print(m.weight)
+    net.apply(init_weights)
+    #print(net.parameters())
     net.float().cuda()
     net.train()
-    criterion = nn.MSELoss()
-    # optimizer = optim.SGD(net.parameters(), lr=config['lr'], momentum=config['momentum'] , weight_decay=config['weight_decay'])
-    optimizer = optim.Adam(net.parameters(),lr=config['lr'])
-    trainDataset = KFDataset(config)
-    trainDataset.load()
+    criterion = nn.MSELoss(size_average=False).cuda()
+
+    optimizer = optim.SGD(net.parameters(), lr=config['lr'],momentum=config['momentum'], weight_decay=config['weight_decay'])
+    trainDataset = MPIIDataset(config)
+    
     trainDataLoader = DataLoader(trainDataset,config['batch_size'],True)
     sample_num = len(trainDataset)
 
@@ -136,16 +197,16 @@ if __name__ == '__main__':
 
     for epoch in range(config['start_epoch'],config['epoch_num']+config['start_epoch']):
         running_loss = 0.0
-        for i, (inputs, heatmaps_targets, gts) in enumerate(trainDataLoader):
+        for i, (inputs, gts) in enumerate(trainDataLoader):
             inputs = Variable(inputs).cuda()
-            heatmaps_targets = Variable(heatmaps_targets).cuda()
-            mask,indices_valid = calculate_mask(heatmaps_targets)
-
+            gts = Variable(gts).cuda()
+            
             optimizer.zero_grad()
+            print(inputs.shape)
             outputs = net(inputs)
-            outputs = outputs * mask
-            heatmaps_targets = heatmaps_targets * mask
-            loss = criterion(outputs, heatmaps_targets)
+            
+            print(outputs.shape,gts.shape)
+            loss = criterion(outputs, gts)
             loss.backward()
             optimizer.step()
 
@@ -153,14 +214,24 @@ if __name__ == '__main__':
             v_max = torch.max(outputs)
             v_min = torch.min(outputs)
 
-            # 评估
-            all_peak_points = get_peak_points(heatmaps_targets.cpu().data.numpy())
-            loss_coor = get_mse(all_peak_points, gts.numpy(),indices_valid)
+            outputs = outputs.cpu().detach().numpy()
+            gts = gts.cpu().detach().numpy()
+            result = np.zeros((config['out_width'],config['out_width']))
+            groundtruth = np.zeros((config['out_width'],config['out_width']))
+            for i in range(len(outputs[0])):
+                result = result+outputs[0][i]
+                groundtruth += gts[0][i]
+            cv2.imshow('result',result)
+            cv2.imshow('groundtruth',groundtruth)
+            #cv2.imshow('channel0',outputs[0][0])
+            #cv2.imshow('channel1',outputs[0][1])
+            #cv2.imshow('channel2',outputs[0][2])
+            #cv2.imshow('channel0-1',outputs[0][0]-outputs[0][1])
+            cv2.waitKey(500)
 
-            print('[ Epoch {:005d} -> {:005d} / {} ] loss : {:15} loss_coor : {:15} max : {:10} min : {}'.format(
+            print('[ Epoch {:005d} -> {:005d} / {} ] loss : {:10} max : {:5} min : {}'.format(
                 epoch, i * config['batch_size'],
-                sample_num, loss.data[0],loss_coor.data[0],v_max.data[0],v_min.data[0]))
-
+                sample_num, loss.data[0],v_max.data[0],v_min.data[0]))
 
 
         if (epoch+1) % config['save_freq'] == 0 or epoch == config['epoch_num'] - 1:

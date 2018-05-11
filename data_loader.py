@@ -4,7 +4,8 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset,DataLoader
 import copy
-
+import scipy.io
+import cv2
 import matplotlib.pyplot as plt
 
 # from train import config
@@ -34,136 +35,82 @@ def plot_demo(X,y):
     plt.show()
 
 
-class KFDataset(Dataset):
-    def __init__(self,config,X=None,gts=None):
+class MPIIDataset(Dataset):
+    def __init__(self,config,state='train'):
         """
-
         :param X: (N,96*96)
         :param gts: (N,15,2)
         """
-        self.__X = X
-        self.__gts = gts
         self.__sigma = config['sigma']
         self.__debug_vis = config['debug_vis']
-        self.__fname = config['fname']
+        #self.__fname = config['fname']
         self.__is_test = config['is_test']
-        # self.__ftrain = config['ftrain']
-        # self.load(self.__ftrain)
+        self.image_root = config['image_root']
+        self.annos = scipy.io.loadmat(config['fname'])[state][0]
+        self.out_width = config['out_width']
+        self.in_width = config['in_width']
+        self.point_size = config['point_size']
+        self.nclass = config['nclass']
+        self.pnum = 0
 
-    def load(self,cols=None):
-        """
-
-        :param fname:
-        :param test:
-        :param cols:
-        :return: X (N,96*96) Y (N,15,2)
-        """
-        test = self.__is_test
-        fname = self.__fname
-        df = pd.read_csv(fname)
-
-        # The Image column has pixel values separated by space; convert
-        # the values to numpy arrays:
-        df['Image'] = df['Image'].apply(lambda im: np.fromstring(im, sep=' '))
-
-        if cols:  # get a subset of columns
-            df = df[list(cols) + ['Image']]
-
-        # print(df.count())  # prints the number of values for each column
-        if test == False:
-            # df = df.dropna()  # drop all rows that have missing values in them
-            pass
-        # 选出存在缺失值的iamge
-        # df = df[df.isnull().any(axis=1)]
-        # print(df.count())  # prints the number of values for each column
-        df_np = df.as_matrix()
-
-        X = df_np[:,-1]
-        x_list = X.tolist()
-        x_list = [item.tolist() for item in x_list]
-        X = np.array(x_list)
-        # X = X.astype(np.float32)
-        # X = X / 255.  # scale pixel values to [0, 1]
-
-        if not test:  # only FTRAIN has any target columns
-            gts = df_np[:, :-1]
-            gts = gts.reshape((gts.shape[0], -1, 2))
-            gts = gts.astype(np.float32)
-        else:
-            gts = df['ImageId'].as_matrix()
-
-        self.__X = X
-        self.__gts = gts
-
-        return X, gts
+        x_range = [i for i in range(self.point_size)]
+        y_range = [i for i in range(self.point_size)]
+        xx, yy = np.meshgrid(x_range, y_range)
+        d2 = (xx - (self.point_size-1)/2) ** 2 + (yy - (self.point_size-1)/2) ** 2
+        exponent = d2 / 2.0 / self.__sigma / self.__sigma
+        self.heatmap = np.exp(-exponent)
+        np.savetxt('heatmap.txt',self.heatmap)
+        self.heatmap = np.pad(self.heatmap,self.out_width,'constant')
+        heatmap_show = self.heatmap.astype(np.uint8)*255
+        
 
     def __len__(self):
-        return len(self.__X)
+        return len(self.annos)
+
+    def putGaussian(self,gt,x,y):
+        xx = self.out_width+(self.point_size-1)//2-y
+        yy = self.out_width+(self.point_size-1)//2-x
+        #print(xx,yy)
+        gt=gt+self.heatmap[xx:xx+self.out_width, yy:yy+self.out_width]
+        #gt_show = gt.astype(np.uint8)*255
+        #cv2.imshow('gt',gt_show)
+        #cv2.waitKey(0)
+        #self.pnum += 1
+        return gt
 
     def __getitem__(self, item):
-        H,W = 96,96
-        x = self.__X[item]
-        gt = self.__gts[item]
-
-        if self.__is_test:
-            x = x.reshape((1, 96, 96)).astype(np.float32)
-            x = x / 255.
-            return x,gt #返回图像以及其id
-
-
-        heatmaps = self._putGaussianMaps(gt,H,W,1,self.__sigma)
-
-        if self.__debug_vis == True:
-            for i in range(heatmaps.shape[0]):
-                img = copy.deepcopy(x).astype(np.uint8).reshape((H,W))
-                self.visualize_heatmap_target(img,copy.deepcopy(heatmaps[i]),1)
-
-        x = x.reshape((1,96,96)).astype(np.float32)
-        x = x / 255.
-        heatmaps = heatmaps.astype(np.float32)
-        return x,heatmaps,gt
-
-    def _putGaussianMap(self, center, visible_flag, crop_size_y, crop_size_x, stride, sigma):
-        """
-        根据一个中心点,生成一个heatmap
-        :param center:
-        :return:
-        """
-        grid_y = crop_size_y / stride
-        grid_x = crop_size_x / stride
-        if visible_flag == False:
-            return np.zeros((grid_y,grid_x))
-        start = stride / 2.0 - 0.5
-        y_range = [i for i in range(grid_y)]
-        x_range = [i for i in range(grid_x)]
-        xx, yy = np.meshgrid(x_range, y_range)
-        xx = xx * stride + start
-        yy = yy * stride + start
-        d2 = (xx - center[0]) ** 2 + (yy - center[1]) ** 2
-        exponent = d2 / 2.0 / sigma / sigma
-        heatmap = np.exp(-exponent)
-        return heatmap
-
-    def _putGaussianMaps(self,keypoints,crop_size_y, crop_size_x, stride, sigma):
-        """
-
-        :param keypoints: (15,2)
-        :param crop_size_y: int
-        :param crop_size_x: int
-        :param stride: int
-        :param sigma: float
-        :return:
-        """
-        all_keypoints = keypoints
-        point_num = all_keypoints.shape[0]
-        heatmaps_this_img = []
-        for k in range(point_num):
-            flag = ~np.isnan(all_keypoints[k,0])
-            heatmap = self._putGaussianMap(all_keypoints[k],flag,crop_size_y,crop_size_x,stride,sigma)
-            heatmap = heatmap[np.newaxis,...]
-            heatmaps_this_img.append(heatmap)
-        heatmaps_this_img = np.concatenate(heatmaps_this_img,axis=0) # (num_joint,crop_size_y/stride,crop_size_x/stride)
-        return heatmaps_this_img
+        #print(item)
+        image_name = self.annos['image'][item][0]
+        img = cv2.imread(self.image_root+image_name)
+        w,h = img.shape[0],img.shape[1]
+        #print(w,h)
+        img = cv2.resize(img,(self.in_width,self.in_width))
+        #print('debug#1')
+        img = np.transpose(img,(2,0,1)).astype(np.float32)
+        #print('debug#2')
+        persons = self.annos['annorect'][item][0]
+        #print('debug#4')
+        gt = np.zeros((self.nclass,self.out_width,self.out_width))
+        self.pnum = 0
+        #print(gt.shape)
+        for person in persons:
+            #if(person['annopoints'].shape[0]==0):
+            #    print(image_name)
+            person = person['annopoints'][0]['point'][0][0]
+            #print(len(person))
+            for point in person:
+                pid = point['id'][0][0]
+                x = int(point['x'][0][0]*self.out_width/h)
+                y = int(point['y'][0][0]*self.out_width/w)
+                if(x<0 or y<0 or x>255 or y>255):
+                    continue
+                #print('true x,y is:{},{}\n'.format(x,y))
+                gt[pid] = self.putGaussian(gt[pid],x,y)
+                #np.savetxt(str(pid)+'.txt',gt[pid][y-9:y+9,x-9:x+9])
+        #print(gt.shape)
+        gt=gt.astype(np.float32)
+        #print(self.pnum)
+        return img,gt
 
     def visualize_heatmap_target(self,oriImg,heatmap,stride):
 
@@ -173,10 +120,23 @@ class KFDataset(Dataset):
 
 if __name__ == '__main__':
     from train import config
-    dataset = KFDataset(config)
-    dataset.load()
-    dataLoader = DataLoader(dataset=dataset,batch_size=64,shuffle=False)
-    for i, (x, y ,gt) in enumerate(dataLoader):
-        print(x.size())
-        print(y.size())
-        print(gt.size())
+    dataset = MPIIDataset(config)
+    dataLoader = DataLoader(dataset=dataset,batch_size=1,shuffle=False)
+    for i, (img,gts) in enumerate(dataLoader):
+        img,gts = img.numpy()[0],gts.numpy()[0]
+        gt=np.zeros((1,256,256)).astype(np.float32)
+        for g in gts:
+            gt=gt+[g]
+            #peakIndexTuple = np.unravel_index(np.argmax(g), g.shape)
+            
+        #np.savetxt('gt1.txt',gt[0][164:176,150:162])
+        #np.savetxt('gt2.txt',gt[0][91:103,163:175])
+        #np.savetxt('gt3.txt',gt[0][169:181,164:176])
+        #img,gt = np.transpose(img,(1,2,0)).astype(np.uint8),np.transpose(gt,(1,2,0)).astype(np.uint8)*255
+        img,gt = np.transpose(img,(1,2,0)).astype(np.uint8), np.transpose(gt,(1,2,0))
+        #print(gt.max())
+        cv2.imshow('img',img)
+        cv2.imshow('gt',gt)
+        cv2.waitKey(0)
+
+

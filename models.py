@@ -6,7 +6,7 @@ from torch.autograd import Variable
 
 class HourGlass(nn.Module):
     """不改变特征图的高宽"""
-    def __init__(self,n=4,f=128):
+    def __init__(self,n=6,f=128):
         """
         :param n: hourglass模块的层级数目
         :param f: hourglass模块中的特征图数量
@@ -29,7 +29,6 @@ class HourGlass(nn.Module):
             self.res_center = Residual(f,f)
         setattr(self,'res'+str(n)+'_3',Residual(f,f))
         setattr(self,'unsample'+str(n),Upsample(scale_factor=2))
-
 
     def _forward(self,x,n,f):
         # 上分支
@@ -58,16 +57,17 @@ class Residual(nn.Module):
     def __init__(self,ins,outs):
         super(Residual,self).__init__()
         # 卷积模块
+        out = int(outs/2)
         self.convBlock = nn.Sequential(
             nn.BatchNorm2d(ins),
             nn.ReLU(inplace=True),
-            nn.Conv2d(ins,outs/2,1),
-            nn.BatchNorm2d(outs/2),
+            nn.Conv2d(ins,out,1),
+            nn.BatchNorm2d(out),
             nn.ReLU(inplace=True),
-            nn.Conv2d(outs/2,outs/2,3,1,1),
-            nn.BatchNorm2d(outs/2),
+            nn.Conv2d(out,out,3,1,1),
+            nn.BatchNorm2d(out),
             nn.ReLU(inplace=True),
-            nn.Conv2d(outs/2,outs,1)
+            nn.Conv2d(out,outs,1)
         )
         # 跳层
         if ins != outs:
@@ -83,7 +83,7 @@ class Residual(nn.Module):
         return x
 
 class Lin(nn.Module):
-    def __init__(self,numIn=128,numout=15):
+    def __init__(self,numIn=128,numout=16):
         super(Lin,self).__init__()
         self.conv = nn.Conv2d(numIn,numout,1)
         self.bn = nn.BatchNorm2d(numout)
@@ -92,20 +92,26 @@ class Lin(nn.Module):
         return self.relu(self.bn(self.conv(x)))
 
 
-class KFSGNet(nn.Module):
-
+class HGNet(nn.Module):
     def __init__(self):
-        super(KFSGNet,self).__init__()
-        self.__conv1 = nn.Conv2d(1,64,1)
+        super(HGNet,self).__init__()
+        self.__conv1 = nn.Conv2d(3,64,1)
         self.__relu1 = nn.ReLU(inplace=True)
         self.__conv2 = nn.Conv2d(64,128,1)
         self.__relu2 = nn.ReLU(inplace=True)
-        self.__hg = HourGlass()
+        self.__hg1 = HourGlass()
+        self.__hg2 = HourGlass()
+        self.__hg3 = HourGlass()
+        self.__hg4 = HourGlass()
         self.__lin = Lin()
     def forward(self,x):
+        #print(x)
         x = self.__relu1(self.__conv1(x))
         x = self.__relu2(self.__conv2(x))
-        x = self.__hg(x)
+        x = self.__hg1(x)
+        x = self.__hg2(x)
+        x = self.__hg3(x)
+        x = self.__hg4(x)
         x = self.__lin(x)
         return x
 
