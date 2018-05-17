@@ -59,7 +59,7 @@ class MPIIDataset(Dataset):
         d2 = (xx - (self.point_size-1)/2) ** 2 + (yy - (self.point_size-1)/2) ** 2
         exponent = d2 / 2.0 / self.__sigma / self.__sigma
         self.heatmap = np.exp(-exponent)
-        np.savetxt('heatmap.txt',self.heatmap)
+        #np.savetxt('heatmap.txt',self.heatmap)
         self.heatmap = np.pad(self.heatmap,self.out_width,'constant')
         heatmap_show = self.heatmap.astype(np.uint8)*255
         
@@ -102,7 +102,7 @@ class MPIIDataset(Dataset):
                 pid = point['id'][0][0]
                 x = int(point['x'][0][0]*self.out_width/h)
                 y = int(point['y'][0][0]*self.out_width/w)
-                if(x<0 or y<0 or x>255 or y>255):
+                if(x<0 or y<0 or x>self.out_width-1 or y>self.out_width-1):
                     continue
                 #print('true x,y is:{},{}\n'.format(x,y))
                 gt[pid] = self.putGaussian(gt[pid],x,y)

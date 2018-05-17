@@ -61,17 +61,17 @@ parser.add_argument('--test_frequency', default=10)
 args = parser.parse_args()
 
 config = dict()
-config['lr'] = 0.1
+config['lr'] = 0.001
 config['momentum'] = 0.9
 config['weight_decay'] = 1e-4
 config['epoch_num'] = 10
-config['batch_size'] = 1
+config['batch_size'] = 4
 config['sigma'] = 1.
 config['debug_vis'] = False         # 是否可视化heatmaps
 config['fname'] = 'data/annolist/train_gt.mat'
 config['image_root'] = 'data/images/'
-config['in_width'] = 128
-config['out_width'] = 128
+config['in_width'] = 64
+config['out_width'] = 64
 config['nclass'] = 16
 config['point_size'] = 5 #奇数
 # config['fname'] = 'data/training.csv'
@@ -180,11 +180,12 @@ if __name__ == '__main__':
         if type(m) == nn.Linear:
             m.weight.data.fill_(1.0)
             print(m.weight)
-    net.apply(init_weights)
+    #net.apply(init_weights)
     #print(net.parameters())
     net.float().cuda()
+    net.load_state_dict(torch.load('kd_epoch_0_model.pth'))
     net.train()
-    criterion = nn.MSELoss(size_average=False).cuda()
+    criterion = nn.MSELoss(size_average=True).cuda()
 
     optimizer = optim.SGD(net.parameters(), lr=config['lr'],momentum=config['momentum'], weight_decay=config['weight_decay'])
     trainDataset = MPIIDataset(config)
@@ -202,10 +203,8 @@ if __name__ == '__main__':
             gts = Variable(gts).cuda()
             
             optimizer.zero_grad()
-            print(inputs.shape)
             outputs = net(inputs)
             
-            print(outputs.shape,gts.shape)
             loss = criterion(outputs, gts)
             loss.backward()
             optimizer.step()
@@ -214,8 +213,8 @@ if __name__ == '__main__':
             v_max = torch.max(outputs)
             v_min = torch.min(outputs)
 
-            outputs = outputs.cpu().detach().numpy()
-            gts = gts.cpu().detach().numpy()
+            outputs = outputs.cpu().data.numpy()
+            gts = gts.cpu().data.numpy()
             result = np.zeros((config['out_width'],config['out_width']))
             groundtruth = np.zeros((config['out_width'],config['out_width']))
             for i in range(len(outputs[0])):
@@ -227,13 +226,11 @@ if __name__ == '__main__':
             #cv2.imshow('channel1',outputs[0][1])
             #cv2.imshow('channel2',outputs[0][2])
             #cv2.imshow('channel0-1',outputs[0][0]-outputs[0][1])
-            cv2.waitKey(500)
+            cv2.waitKey(300)
 
-            print('[ Epoch {:005d} -> {:005d} / {} ] loss : {:10} max : {:5} min : {}'.format(
-                epoch, i * config['batch_size'],
-                sample_num, loss.data[0],v_max.data[0],v_min.data[0]))
+            print('[Epoch {:005d} -> {:005d} / {}] loss: {:10} max: {:5} min: {}'.format(epoch, i * config['batch_size'], sample_num, loss.data[0],v_max.data[0],v_min.data[0]))
 
+        #if (epoch+1) % config['save_freq'] == 0 or epoch == config['epoch_num'] - 1:
+        torch.save(net.state_dict(),'kd_epoch_{}_model.pth'.format(epoch))
 
-        if (epoch+1) % config['save_freq'] == 0 or epoch == config['epoch_num'] - 1:
-            torch.save(net.state_dict(),'kd_epoch_{}_model.ckpt'.format(epoch))
-
+           

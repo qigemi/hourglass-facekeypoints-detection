@@ -6,7 +6,7 @@ from torch.autograd import Variable
 
 class HourGlass(nn.Module):
     """不改变特征图的高宽"""
-    def __init__(self,n=6,f=128):
+    def __init__(self,n=4,f=512):
         """
         :param n: hourglass模块的层级数目
         :param f: hourglass模块中的特征图数量
@@ -83,7 +83,7 @@ class Residual(nn.Module):
         return x
 
 class Lin(nn.Module):
-    def __init__(self,numIn=128,numout=16):
+    def __init__(self,numIn=512,numout=16):
         super(Lin,self).__init__()
         self.conv = nn.Conv2d(numIn,numout,1)
         self.bn = nn.BatchNorm2d(numout)
@@ -95,23 +95,25 @@ class Lin(nn.Module):
 class HGNet(nn.Module):
     def __init__(self):
         super(HGNet,self).__init__()
-        self.__conv1 = nn.Conv2d(3,64,1)
+        self.__conv1 = nn.Conv2d(3,64,3,padding=1)
         self.__relu1 = nn.ReLU(inplace=True)
-        self.__conv2 = nn.Conv2d(64,128,1)
+        self.__conv2 = nn.Conv2d(64,128,3,padding=1)
         self.__relu2 = nn.ReLU(inplace=True)
-        self.__hg1 = HourGlass()
-        self.__hg2 = HourGlass()
-        self.__hg3 = HourGlass()
-        self.__hg4 = HourGlass()
-        self.__lin = Lin()
+        self.__conv3 = nn.Conv2d(128,512,3,padding=1)
+        self.__hg1 = HourGlass(n=4,f=512)
+        self.__hg2 = HourGlass(n=4,f=512)
+        #self.__hg3 = HourGlass(n=4,f=512)
+        #self.__hg4 = HourGlass(n=4,f=512)
+        self.__lin = Lin(numIn=512,numout=16)
     def forward(self,x):
         #print(x)
         x = self.__relu1(self.__conv1(x))
         x = self.__relu2(self.__conv2(x))
+        x = self.__relu2(self.__conv3(x))
         x = self.__hg1(x)
         x = self.__hg2(x)
-        x = self.__hg3(x)
-        x = self.__hg4(x)
+        #x = self.__hg3(x)
+        #x = self.__hg4(x)
         x = self.__lin(x)
         return x
 
